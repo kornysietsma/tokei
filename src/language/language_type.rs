@@ -21,10 +21,46 @@ use self::LanguageType::*;
 
 include!(concat!(env!("OUT_DIR"), "/language_type.rs"));
 
+/// a type implementing language information - Stats or custom types
+pub trait LanguageSummary {
+    fn new(name: PathBuf) -> Self;
+    fn unprocessed_lines(&mut self, lines:LineIter);
+    fn code_line(&mut self, line:&[u8]);
+    fn comment_line(&mut self, line:&[u8]);
+    fn blank_line(&mut self, line:&[u8]);
+    fn postprocess(&mut self);
+}
+
+impl LanguageSummary for Stats {
+    fn new(name: PathBuf) -> Self {
+        Stats::new(name)
+    }
+    fn unprocessed_lines(&mut self, lines:LineIter) {
+        let count = lines.count();
+        self.code += count;
+        self.lines += count;
+    }
+    fn code_line(&mut self, _line:&[u8]) {
+        self.code += 1;
+        trace!("Code No.{}", self.code);
+    }
+    fn comment_line(&mut self, _line:&[u8]) {
+        self.comments += 1;
+        trace!("Comment No.{}", self.comments);
+    }
+    fn blank_line(&mut self, _line:&[u8]) {
+        self.blanks += 1;
+        trace!("Blank No.{}", self.blanks);
+    }
+    fn postprocess(&mut self) {
+        self.lines = self.blanks + self.code + self.comments;
+    }
+}
+
 impl LanguageType {
     /// Parses a given `Path` using the `LanguageType`. Returning `Stats`
     /// on success and giving back ownership of PathBuf on error.
-    pub fn parse(self, path: PathBuf, config: &Config) -> Result<Stats, (io::Error, PathBuf)> {
+    pub fn parse<T:LanguageSummary>(self, path: PathBuf, config: &Config) -> Result<T, (io::Error, PathBuf)> {
         let text = {
             let f = match File::open(&path) {
                 Ok(f) => f,
@@ -44,32 +80,30 @@ impl LanguageType {
     }
 
     /// Parses the text provided. Returns `Stats` on success.
-    pub fn parse_from_str<A: AsRef<str>>(self,
+    pub fn parse_from_str<T: LanguageSummary, A: AsRef<str>>(self,
                           path: PathBuf,
                           text: A,
                           config: &Config)
-        -> Stats
+        -> T
     {
         self.parse_from_slice(path, text.as_ref().as_bytes(), config)
     }
 
     /// Parses the text provided. Returning `Stats` on success.
-    pub fn parse_from_slice<A: AsRef<[u8]>>(self,
+    pub fn parse_from_slice<T: LanguageSummary, A: AsRef<[u8]>>(self,
                           path: PathBuf,
                           text: A,
                           config: &Config)
-        -> Stats
+        -> T
     {
         let lines = LineIter::new(b'\n', text.as_ref());
-        let mut stats = Stats::new(path);
+        let mut summary = T::new(path);
 
         if self.is_blank() {
-            let count = lines.count();
-            stats.lines = count;
-            stats.code = count;
-            stats
+            summary.unprocessed_lines(lines);
+            summary
         } else {
-            self.parse_lines(config, lines, stats)
+            self.parse_lines(config, lines, summary)
         }
     }
 
@@ -77,7 +111,7 @@ impl LanguageType {
     /// line comments or quotes. Returns `bool` indicating whether it was
     /// successful or not.
     #[inline]
-    fn parse_basic(self, syntax: &SyntaxCounter, line: &[u8], stats: &mut Stats)
+    fn parse_basic<T: LanguageSummary>(self, syntax: &SyntaxCounter, raw_line: &[u8], line: &[u8], stats: &mut T)
         -> bool
     {
         if syntax.quote.is_some() ||
@@ -90,11 +124,9 @@ impl LanguageType {
         if syntax.line_comments.iter()
                                .any(|s| line.starts_with(s.as_bytes()))
         {
-            stats.comments += 1;
-            trace!("Comment No.{}", stats.comments);
+            stats.comment_line(raw_line);
         } else {
-            stats.code += 1;
-            trace!("Code No.{}", stats.code);
+            stats.code_line(raw_line);
         }
 
         trace!("{}", String::from_utf8_lossy(line));
@@ -104,26 +136,25 @@ impl LanguageType {
     }
 
     #[inline]
-    fn parse_lines<'a>(self,
+    fn parse_lines<'a, T: LanguageSummary>(self,
                        config: &Config,
                        lines: impl IntoIterator<Item=&'a [u8]>,
-                       mut stats: Stats)
-        -> Stats
+                       mut stats: T)
+        -> T
     {
         let mut syntax = SyntaxCounter::new(self);
 
-        for line in lines {
+        for raw_line in lines {
 
-            if line.trim().is_empty() {
-                stats.blanks += 1;
-                trace!("Blank No.{}", stats.blanks);
+            if raw_line.trim().is_empty() {
+                stats.blank_line(raw_line);
                 continue;
             }
 
             // FORTRAN has a rule where it only counts as a comment if it's the
             // first character in the column, so removing starting whitespace
             // could cause a miscount.
-            let line = if syntax.is_fortran { line } else { line.trim() };
+            let line = if syntax.is_fortran { raw_line } else { raw_line.trim() };
             let had_multi_line = !syntax.stack.is_empty();
             let mut ended_with_comments = false;
             let mut skip = 0;
@@ -133,7 +164,7 @@ impl LanguageType {
                 }}
             }
 
-            if self.parse_basic(&syntax, line, &mut stats) {
+            if self.parse_basic(&syntax, raw_line, line, &mut stats) {
                 continue;
             }
 
@@ -203,16 +234,14 @@ impl LanguageType {
 
 
             if is_comments {
-                stats.comments += 1;
-                trace!("Comment No.{}", stats.comments);
+                stats.comment_line(raw_line);
                 trace!("Was the Comment stack empty?: {}", !had_multi_line);
             } else {
-                stats.code += 1;
-                trace!("Code No.{}", stats.code);
+                stats.code_line(raw_line);
             }
         }
 
-        stats.lines = stats.blanks + stats.code + stats.comments;
+        stats.postprocess();
         stats
     }
 }
