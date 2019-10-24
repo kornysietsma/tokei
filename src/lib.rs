@@ -56,6 +56,7 @@ mod stats;
 pub use self::{
     config::Config,
     language::{LanguageType, Languages, Language},
+    language::language_type::LanguageSummary,
     sort::Sort,
     stats::Stats,
 };

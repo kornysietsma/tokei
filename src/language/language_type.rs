@@ -21,13 +21,19 @@ use self::LanguageType::*;
 
 include!(concat!(env!("OUT_DIR"), "/language_type.rs"));
 
-/// a type implementing language information - Stats or custom types
+/// a struct representing summarised information for a language chunk - e.g. Stats
 pub trait LanguageSummary {
+    /// construct a new summary
     fn new(name: PathBuf) -> Self;
+    /// handle 'blank' files, where all lines treated as code
     fn unprocessed_lines(&mut self, lines:LineIter);
+    /// handle a line of code
     fn code_line(&mut self, line:&[u8]);
+    /// handle a comment line
     fn comment_line(&mut self, line:&[u8]);
+    /// handle a blank line
     fn blank_line(&mut self, line:&[u8]);
+    /// processing after aggregation - e.g. for calculating totals
     fn postprocess(&mut self);
 }
 
