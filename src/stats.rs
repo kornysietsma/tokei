@@ -14,6 +14,8 @@ pub struct CodeStats {
     pub comments: usize,
     /// Language blobs that were contained inside this blob.
     pub blobs: BTreeMap<LanguageType, CodeStats>,
+    /// Korny hack - all non-comment lines
+    pub code_lines: Vec<Vec<u8>>,
 }
 
 impl CodeStats {
@@ -38,6 +40,7 @@ impl CodeStats {
             summary.blanks += child_summary.blanks;
             summary.comments += child_summary.comments;
             summary.code += child_summary.code;
+            summary.code_lines.extend(child_summary.code_lines);
         }
 
         summary
@@ -58,6 +61,7 @@ impl ops::AddAssign for CodeStats {
         self.blanks += rhs.blanks;
         self.code += rhs.code;
         self.comments += rhs.comments;
+        self.code_lines.extend(rhs.code_lines);
 
         for (language, stats) in rhs.blobs {
             *self.blobs.entry(language).or_default() += stats;

@@ -176,6 +176,7 @@ impl SyntaxCounter {
         if self.is_plain_mode() {
             if line.trim().is_empty() {
                 stats.blanks += 1;
+                stats.code_lines.push(line.to_vec());
                 trace!("Blank No.{}", stats.blanks);
                 return true;
             } else if !self.shared.important_syntax.is_match(line) {
@@ -192,6 +193,7 @@ impl SyntaxCounter {
                     trace!("Comment No.{}", stats.comments);
                 } else {
                     stats.code += 1;
+                    stats.code_lines.push(line.to_vec());
                     trace!("Code No.{}", stats.code);
                 }
 

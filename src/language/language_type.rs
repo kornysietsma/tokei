@@ -22,6 +22,19 @@ use self::LanguageType::*;
 
 include!(concat!(env!("OUT_DIR"), "/language_type.rs"));
 
+fn merge_opt_lines(first: Option<Vec<Vec<u8>>>, second: Option<Vec<Vec<u8>>>) -> Option<Vec<Vec<u8>>> {
+    match (first, second) {
+        (None, None) => None,
+        (Some(f), None) => Some(f),
+        (None, Some(s)) => Some(s),
+        (Some(f), Some(s)) => {
+            let mut res = f.clone();
+            res.extend(s);
+            Some(res)
+        } 
+    }
+}
+
 impl LanguageType {
     /// Parses a given `Path` using the `LanguageType`. Returning `Report`
     /// on success and giving back ownership of PathBuf on error.
@@ -91,29 +104,30 @@ impl LanguageType {
             let simple_parse = move || {
                 LineIter::new(b'\n', skippable_text)
                     .par_bridge()
-                    .map(|line| {
+                    .map(|orig_line| {
                         // FORTRAN has a rule where it only counts as a comment if it's the
                         // first character in the column, so removing starting whitespace
                         // could cause a miscount.
-                        let line = if is_fortran { line } else { line.trim() };
+                        let line = if is_fortran { orig_line } else { orig_line.trim() };
                         if line.trim().is_empty() {
-                            (1, 0, 0)
+                            (1, 0, 0, Some(vec![orig_line.to_vec()]))
                         } else if is_literate
                             || comments.iter().any(|c| line.starts_with(c.as_bytes()))
                         {
-                            (0, 0, 1)
+                            (0, 0, 1, None)
                         } else {
-                            (0, 1, 0)
+                            (0, 1, 0, Some(vec![orig_line.to_vec()]))
                         }
                     })
-                    .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+                    .reduce(|| (0, 0, 0, None), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, merge_opt_lines(a.3, b.3)))
             };
 
-            let (mut stats, (blanks, code, comments)) = rayon::join(parse_lines, simple_parse);
+            let (mut stats, (blanks, code, comments, code_lines)) = rayon::join(parse_lines, simple_parse);
 
             stats.blanks += blanks;
             stats.code += code;
             stats.comments += comments;
+            stats.code_lines.extend(code_lines.unwrap_or(vec![]));
             stats
         } else {
             self.parse_lines(config, text, CodeStats::new(), syntax)
@@ -131,14 +145,14 @@ impl LanguageType {
         let mut stepper = LineStep::new(b'\n', 0, lines.len());
 
         while let Some((start, end)) = stepper.next(lines) {
-            let line = &lines[start..end];
+            let orig_line = &lines[start..end];
             // FORTRAN has a rule where it only counts as a comment if it's the
             // first character in the column, so removing starting whitespace
             // could cause a miscount.
             let line = if syntax.shared.is_fortran {
-                line
+                orig_line
             } else {
-                line.trim()
+                orig_line.trim()
             };
             trace!("{}", String::from_utf8_lossy(line));
 
@@ -171,6 +185,7 @@ impl LanguageType {
                             }
                             LanguageContext::Html { language } => {
                                 stats.code += 1;
+                                stats.code_lines.push(orig_line.to_vec());
                                 // Add all the markdown blobs.
                                 *stats.blobs.entry(language).or_default() += blob;
                             }
@@ -191,6 +206,7 @@ impl LanguageType {
                 trace!("Was the Comment stack empty?: {}", !started_in_comments);
             } else {
                 stats.code += 1;
+                stats.code_lines.push(orig_line.to_vec());
                 trace!("Code No.{}", stats.code);
             }
         }
